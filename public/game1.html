@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>近未来型障害物＆コイン回避ゲーム</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+<script src="https://cdn.socket.io/4.5.1/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.39/Tone.js"></script>
+<style>
+/* 近未来的なデザインのためのCSS */
+body { 
+  margin: 0; 
+  display: flex; 
+  justify-content: center; 
+  align-items: center; 
+  min-height: 100vh; 
+  flex-direction: column; 
+  background-color: #0d0d1a;
+  overflow: hidden;
+}
+canvas { 
+  display: block; 
+  border: 2px solid #00ffff;
+  box-shadow: 0 0 15px #00ffff, 0 0 25px #00ffff;
+  background: linear-gradient(180deg, #1a0a33 0%, #0a0a1a 100%);
+}
+#joinBtn {
+    background-color: #00ffff;
+    color: #0a0a1a;
+    border: none;
+    padding: 15px 30px;
+    font-size: 24px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-weight: bold;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff, 0 0 30px #00ffff;
+    transition: all 0.3s ease;
+    margin-bottom: 20px;
+}
+#joinBtn:hover {
+    background-color: #00e6e6;
+    box-shadow: 0 0 15px #00e6e6, 0 0 25px #00e6e6, 0 0 35px #00e6e6;
+    transform: scale(1.05);
+}
+</style>
+</head>
+<body>
+<button id="joinBtn">ルームに入る</button>
+
+<script>
+let socket = io();
+let ballX = 200;
+let ballY = 450;
+let obstacles = [];
+let items = [];
+let score = 0;
+let coinCount = 0;
+let bgm;
+let started = false;
+let gameOver = false;
+let speed = 3;
+let spawnRate = 60;
+let powerUps = []; // {type:'shield', start:millis(), duration:6000}
+let countdown = 0; 
+let countdownStartTime = 0;
+
+// 近未来的な色パレット
+const COLORS = {
+  backgroundDark: [10, 10, 26],
+  backgroundLight: [26, 10, 51],
+  ball: [0, 200, 255],
+  obstacle: [100, 0, 150, 200],
+  itemNormal: [255, 255, 0],
+  itemGold: [255, 215, 0],
+  itemShield: [0, 200, 255],
+  textPrimary: [200, 200, 255],
+  textDanger: [255, 50, 50],
+  glow: [0, 255, 255, 100], // 通常のシアンのグロー
+  feverGlowColors: [ // フィーバー時のグロー用カラーリスト
+    [255, 0, 255, 120], // マゼンタ
+    [0, 255, 255, 120], // シアン
+    [255, 255, 0, 120], // イエロー
+    [0, 255, 100, 120]  // エメラルドグリーン
+  ]
+};
+
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('joinBtn').addEventListener('click', () => {
+    socket.emit('join', 'game');
+    started = true;
+    
+    Tone.start();
+    if (bgm) bgm.start();
+    
+    countdown = 3; 
+    countdownStartTime = millis(); 
+    document.getElementById('joinBtn').remove();
+  });
+});
+
+socket.on('sensor', (data) => {
+  ballX = map(data.g, -45, 45, 0, width);
+});
+
+// p5.js setup
+function setup() {
+  createCanvas(400, 500);
+  angleMode(RADIANS);
+  bgm = new Tone.Player("https://cdn.pixabay.com/download/audio/2023/01/31/audio_94145dd1c7.mp3?filename=funky-groove-140bpm-13485.mp3").toDestination();
+  bgm.loop = true;
+  bgm.volume.value = -10;
+}
+
+// グローエフェクト描画関数 (複数回描画で擬似的に表現)
+function drawGlow(color, x, y, size) {
+  for (let i = 0; i < 5; i++) {
+    fill(color[0], color[1], color[2], color[3] / (i + 1));
+    ellipse(x, y, size + i * 2, size + i * 2);
+  }
+}
+
+// テキストにグロー効果
+function drawGlowText(txt, x, y, size, color, glowColor) {
+  textSize(size);
+  textAlign(CENTER);
+  
+  // 擬似的なテキストシャドウ/グロー
+  for (let i = 0; i < 3; i++) {
+    fill(glowColor[0], glowColor[1], glowColor[2], glowColor[3] / (i + 1));
+    text(txt, x + i * 0.5, y + i * 0.5); // わずかにずらして描画
+    text(txt, x - i * 0.5, y - i * 0.5);
+  }
+  
+  fill(color);
+  text(txt, x, y);
+}
+
+// グラデーション関数
+function setGradient(x, y, w, h, c1, c2) {
+  noFill();
+  for (let i = y; i <= y + h; i++) {
+    let inter = map(i, y, y + h, 0, 1);
+    let c = lerpColor(c1, c2, inter);
+    stroke(c);
+    line(x, i, x + w, i);
+  }
+}
+
+
+// p5.js draw
+function draw() {
+  // 背景グラデーション
+  setGradient(0, 0, width, height, color(COLORS.backgroundLight), color(COLORS.backgroundDark));
+
+  // グリッドライン (半透明)
+  strokeWeight(0.5);
+
+  let currentGlowColor = COLORS.glow; // デフォルトのグローカラー
+
+  // -------------------- 無敵判定と終了処理 --------------------
+  let shieldActive = false;
+  let activeShieldIndex = -1;
+  
+  for (let i = powerUps.length - 1; i >= 0; i--) {
+      let p = powerUps[i];
+      if (p.type === 'shield') {
+          if (millis() - p.start < p.duration) {
+              shieldActive = true;
+              activeShieldIndex = i; // アクティブなシールドを記録
+          } else {
+              // 期間が終了したシールドを削除
+              powerUps.splice(i, 1);
+          }
+      }
+  }
+
+  // ★フィーバー時のグリッドラインとグローカラーの変更★
+  if (shieldActive) {
+      // フレームレートに応じて色を滑らかに変化
+      let colorIndex1 = floor(frameCount / 10) % COLORS.feverGlowColors.length;
+      let colorIndex2 = (colorIndex1 + 1) % COLORS.feverGlowColors.length;
+      let inter = (frameCount / 10) % 1; // 0から1で補間
+      
+      let c1 = COLORS.feverGlowColors[colorIndex1];
+      let c2 = COLORS.feverGlowColors[colorIndex2];
+      
+      let r = lerp(c1[0], c2[0], inter);
+      let g = lerp(c1[1], c2[1], inter);
+      let b = lerp(c1[2], c2[2], inter);
+
+      stroke(r, g, b, 100 + sin(frameCount * 0.1) * 50); // カラフル＆点滅
+      currentGlowColor = [r, g, b, 150]; // ボールのグローもフィーバーカラーに
+  } else {
+      stroke(0, 255, 255, 50); // 通常のシアン
+      currentGlowColor = COLORS.glow; // 通常のグローカラー
+  }
+
+  for (let x = 0; x <= width; x += 50) {
+    line(x, 0, x, height);
+  }
+  for (let y = 0; y <= height; y += 50) {
+    line(0, y, width, y);
+  }
+  noStroke();
+
+
+  if (!started) {
+    fill(COLORS.textPrimary);
+    textSize(20);
+    textAlign(CENTER);
+    text("スマホを接続して『ルームに入る』を押してください", width/2, height/2);
+    return;
+  }
+  
+  if (gameOver) {
+    fill(COLORS.textDanger);
+    textSize(30);
+    textAlign(CENTER);
+    drawGlowText(`GAME OVER\nSCORE: ${score}\nCOINS: ${coinCount}`, width/2, height/2, 30, COLORS.textDanger, [255, 0, 0, 150]);
+    
+    bgm.stop();
+    noLoop();
+    return;
+  }
+  
+  // -------------------- カウントダウン処理 --------------------
+  if (countdown > 0) {
+    let elapsedMillis = millis() - countdownStartTime;
+    let displayCount = 3 - floor(elapsedMillis / 1000);
+
+    fill(COLORS.itemNormal);
+    drawGlowText(displayCount > 0 ? displayCount : "GO!", width/2, height/2, 100, COLORS.itemNormal, COLORS.glow);
+    
+    if (elapsedMillis >= 4000) { 
+         countdown = 0; 
+    }
+    return;
+  }
+  
+  // -------------------- 障害物生成 --------------------
+  if (frameCount % spawnRate === 0) {
+    let w = random(20, 50);
+    let h = random(20, 50);
+    let type = random(['rect','circle','triangle','star']);
+    obstacles.push({x: random(w/2, width-w/2), y: -h, w, h, type});
+  }
+
+  // コイン生成
+  if (frameCount % 100 === 0) { 
+    let size = 20;
+    let typeProb = random();
+    let type = typeProb < 0.30 ? 'normal' : typeProb < 0.80 ? 'gold' : 'shield';
+    items.push({x: random(size, width-size), y: -size, size, type, scale: 1, animation: 0});
+  }
+  
+  // -------------------- 障害物処理 --------------------
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    let obs = obstacles[i];
+    
+    push();
+    translate(obs.x, obs.y);
+    rotate(frameCount * 0.02 * (i % 2 === 0 ? 1 : -1));
+    
+    fill(COLORS.obstacle);
+    stroke(0, 255, 255, 150);
+    strokeWeight(1.5);
+    drawObstacle(obs);
+    pop();
+
+    obs.y += speed;
+
+    // 障害物だけゲームオーバー判定
+    if (!shieldActive && collides(ballX, ballY, obs)) {
+      gameOver = true;
+    }
+
+    // 画面外は削除してスコアアップ
+    if (obs.y - obs.h/2 > height) {
+      score++;
+      obstacles.splice(i, 1);
+      if (spawnRate > 20) spawnRate -= 1;
+      speed += 0.05;
+    }
+  }
+
+  // -------------------- コイン処理 --------------------
+  for (let i = items.length - 1; i >= 0; i--) {
+    let item = items[i];
+    
+    push();
+    translate(item.x, item.y);
+    item.scale = 1 + 0.2 * sin(item.animation);
+    item.animation += 0.2;
+
+    noFill();
+    strokeWeight(2);
+    
+    if (item.type === 'normal') {
+        stroke(COLORS.itemNormal[0], COLORS.itemNormal[1], COLORS.itemNormal[2], 200);
+        drawGlow([COLORS.itemNormal[0], COLORS.itemNormal[1], COLORS.itemNormal[2], 80], 0, 0, item.size * item.scale * 0.8);
+    }
+    else if (item.type === 'gold') {
+        stroke(COLORS.itemGold[0], COLORS.itemGold[1], COLORS.itemGold[2], 200);
+        drawGlow([COLORS.itemGold[0], COLORS.itemGold[1], COLORS.itemGold[2], 80], 0, 0, item.size * item.scale * 0.8);
+    }
+    else if (item.type === 'shield') {
+        stroke(COLORS.itemShield[0], COLORS.itemShield[1], COLORS.itemShield[2], 200);
+        drawGlow([COLORS.itemShield[0], COLORS.itemShield[1], COLORS.itemShield[2], 80], 0, 0, item.size * item.scale * 0.8);
+    }
+    
+    ellipse(0, 0, item.size * item.scale, item.size * item.scale);
+    ellipse(0, 0, item.size * item.scale * 0.6, item.size * item.scale * 0.6);
+    
+    pop();
+
+    item.y += speed * 0.8;
+
+    // 取得判定
+    if (dist(ballX, ballY, item.x, item.y) < (item.size/2 + 20)) {
+      coinCount++;
+      if (item.type==='normal') score+=1;
+      else if (item.type==='gold') score+=5;
+      else if (item.type==='shield') powerUps.push({type:'shield', start:millis(), duration:6000}); // ★durationを6000ms (6秒) に変更★
+
+      items.splice(i, 1);
+
+      try {
+        Tone.Player("https://cdn.pixabay.com/download/audio/2022/03/15/audio_8cb4f7b73e.mp3?filename=coin-collect-retro-8bit-sound-146126.mp3").toDestination().start();
+      } catch (e) {}
+
+      continue;
+    }
+
+    // 画面外は削除
+    if (item.y > height) {
+      items.splice(i, 1);
+    }
+  }
+
+  // ボール描画
+  if (shieldActive) {
+    drawGlow(currentGlowColor, ballX, ballY, 60); // フィーバー中は動的なグローカラー
+    fill(COLORS.ball[0], COLORS.ball[1], COLORS.ball[2], 150);
+    ellipse(ballX, ballY, 60, 60);
+  }
+  drawGlow(currentGlowColor, ballX, ballY, 40); // フィーバー中は動的なグローカラー
+  fill(COLORS.ball);
+  ellipse(ballX, ballY, 40, 40);
+
+  // スコア・コイン表示
+  fill(COLORS.textPrimary);
+  textSize(20);
+  textAlign(LEFT);
+  text(`SCORE: ${score}`, 10, 30);
+  text(`COINS: ${coinCount}`, 10, 55);
+ 
+ // 無敵期間の残り時間を表示
+  if (shieldActive && activeShieldIndex !== -1) {
+    let shieldData = powerUps[activeShieldIndex];
+    let elapsed = millis() - shieldData.start;
+    let remaining = (shieldData.duration - elapsed) / 1000;
+    
+    let displayTime = remaining > 0 ? remaining.toFixed(1) + 's' : '0.0s';
+    
+    fill(COLORS.itemShield);
+    textSize(24);
+    textAlign(LEFT);
+    text(`SHIELD: ${displayTime}`, 10, 85);
+  }
+}
+
+// 描画・衝突判定関数（変更なし）
+function drawObstacle(obs){
+  if (obs.type === 'rect') rectMode(CENTER), rect(0,0,obs.w,obs.h);
+  else if (obs.type === 'circle') ellipse(0,0,obs.w,obs.h);
+  else if (obs.type === 'triangle') triangle(-obs.w/2, obs.h/2, 0, -obs.h/2, obs.w/2, obs.h/2);
+  else if (obs.type === 'star') drawStar(0,0,obs.w/4, obs.w/2, 5);
+}
+
+function drawStar(x, y, radius1, radius2, npoints) {
+  let angle = TWO_PI / npoints;
+  let halfAngle = angle/2.0;
+  beginShape();
+  for (let a = 0; a < TWO_PI; a += angle) {
+    let sx = x + cos(a) * radius2;
+    let sy = y + sin(a) * radius2;
+    vertex(sx, sy);
+    sx = x + cos(a+halfAngle) * radius1;
+    sy = y + sin(a+halfAngle) * radius1;
+    vertex(sx, sy);
+  }
+  endShape(CLOSE);
+}
+
+function collides(bx, by, obs){
+  let ballRadius = 20;
+
+  if (obs.type==='circle' || obs.type==='star') {
+    return dist(bx, by, obs.x, obs.y) < (obs.w/2 + ballRadius);
+  } else if (obs.type==='rect') {
+    let closestX = constrain(bx, obs.x - obs.w/2, obs.x + obs.w/2);
+    let closestY = constrain(by, obs.y - obs.h/2, obs.y + obs.h/2);
+    let distance = dist(bx, by, closestX, closestY);
+    return distance < ballRadius;
+  } else if (obs.type==='triangle') {
+    let dx = abs(bx - obs.x);
+    let dy = abs(by - obs.y);
+    return dx < obs.w/2 + ballRadius && dy < obs.h/2 + ballRadius; 
+  }
+  return false;
+}
+</script>
+</body>
+</html>

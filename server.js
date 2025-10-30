@@ -1,24 +1,28 @@
-// server.js
 const express = require('express');
 const app = express();
 const http = require('http');
 const server = http.createServer(app);
-const { Server } = require("socket.io");
+const { Server } = require('socket.io');
 const io = new Server(server);
 
-// publicフォルダを公開
 app.use(express.static('public'));
 
-// クライアントが接続したときの処理
 io.on('connection', (socket) => {
-  console.log('A user connected');
+  console.log('connected:', socket.id);
+
+  socket.on('join', (room) => {
+    socket.join(room);
+  });
+
+  socket.on('sensor', (data) => {
+    socket.to('game').emit('sensor', data);
+  });
+
   socket.on('disconnect', () => {
-    console.log('User disconnected');
+    console.log('user disconnected');
   });
 });
 
-// サーバー起動
-const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+server.listen(8080, () => {
+  console.log('listening on *:8080');
 });

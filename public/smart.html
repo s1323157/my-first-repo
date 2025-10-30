@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>スマホコントローラ</title>
+  <script src="https://cdn.socket.io/4.5.1/socket.io.min.js"></script>
+</head>
+<body>
+  <h2>リズムキャッチ操作</h2>
+  <button id="joinBtn">ルームに入る</button>
+  <button onclick="request_permission()">センサーを有効にする</button>
+
+  <script>
+    const socket = io();
+    const joinBtn = document.getElementById('joinBtn');
+    joinBtn.addEventListener('click', () => {
+      socket.emit('join', 'game');
+    });
+
+    function request_permission() {
+      if (DeviceOrientationEvent.requestPermission) {
+        DeviceOrientationEvent.requestPermission();
+      }
+    }
+
+    window.addEventListener('deviceorientation', (e) => {
+      const data = { g: e.gamma, b: e.beta };
+      socket.emit('sensor', data);
+    });
+  </script>
+</body>
+</html>
