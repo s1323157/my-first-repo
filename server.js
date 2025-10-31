@@ -5,6 +5,9 @@ const server = http.createServer(app);
 const { Server } = require('socket.io');
 const io = new Server(server);
 
+// Renderなどのホスティングでは、環境変数 PORT を利用する
+const PORT = process.env.PORT || 8080;
+
 app.use(express.static('public'));
 
 io.on('connection', (socket) => {
@@ -23,6 +26,6 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(8080, () => {
-  console.log('listening on *:8080');
+server.listen(PORT, () => {
+  console.log(`listening on *:${PORT}`);
 });
